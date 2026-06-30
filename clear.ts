@@ -18,7 +18,6 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const force = args.trim() === "-f" || args.trim() === "--force";
 
-      // Ask for confirmation unless forced
       if (!force) {
         const ok = await ctx.ui.confirm(
           "Clear Session",
@@ -32,7 +31,6 @@ export default function (pi: ExtensionAPI) {
 
       const currentSessionFile = ctx.sessionManager.getSessionFile();
 
-      // Create a brand-new session
       const result = await ctx.newSession({
         parentSession: currentSessionFile,
         withSession: async (replacementCtx) => {

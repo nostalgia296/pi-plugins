@@ -1,7 +1,7 @@
 /**
  * Goal Extension - Persistent thread goal with auto-continuation
  *
- * Ported from Claude Code's /goal command feature.
+ * Ported from Codex's /goal command feature.
  *
  * Features:
  * - /goal <objective>  — Set a persistent goal that drives auto-continuation
@@ -22,10 +22,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 type GoalStatus = "active" | "paused" | "blocked" | "complete" | "max_turns";
 
 interface GoalState {
@@ -33,7 +29,7 @@ interface GoalState {
   status: GoalStatus;
   tokensUsed: number;
   tokenBudget: number | null;
-  startedAt: number; // timestamp ms
+  startedAt: number;
   pausedAt: number | null;
   turnsExecuted: number;
   blockedAttempts: number;
@@ -50,10 +46,6 @@ const MAX_OBJECTIVE_CHARS = 4000;
 const MAX_TURNS = 50;
 const BLOCKED_ATTEMPTS_THRESHOLD = 3;
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
 let goal: GoalState | null = null;
 
 function getGoal(): GoalState | null {
@@ -68,7 +60,7 @@ function formatElapsed(g: GoalState): string {
   if (g.status === "paused" && g.pausedAt) {
     elapsedMs = g.pausedAt - started;
   } else if (g.status === "complete") {
-    elapsedMs = 0; // won't be used
+    elapsedMs = 0;
   } else {
     elapsedMs = now - started;
   }
@@ -117,10 +109,6 @@ function newGoal(objective: string): GoalState {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Persistence
-// ---------------------------------------------------------------------------
-
 function persistGoalState(pi: ExtensionAPI): void {
   if (goal) {
     pi.appendEntry(GOAL_CUSTOM_TYPE, { state: goal } satisfies GoalEntry);
@@ -142,10 +130,6 @@ function reconstructState(ctx: ExtensionContext): void {
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Goal state mutations
-// ---------------------------------------------------------------------------
 
 function setGoal(objective: string): void {
   goal = newGoal(objective);
@@ -221,10 +205,6 @@ function updateGoalTokens(delta: number): void {
   goal.tokensUsed += delta;
 }
 
-// ---------------------------------------------------------------------------
-// GoalTool — LLM-callable tool for goal management
-// ---------------------------------------------------------------------------
-
 const GOAL_TOOL_DESCRIPTION = `Get or update the active goal status. The model may only mark a goal as "complete" or "blocked".`;
 
 const GOAL_TOOL_PROMPT = `Use this tool to interact with the active thread goal.
@@ -261,10 +241,6 @@ When marking blocked, provide a \`reason\` describing the specific blocker.
 - If no goal is active, \`get\` returns a message saying so; \`update\` returns an error.
 - On completion, the tool result includes a usage report (tokens, time, turns).`;
 
-// ---------------------------------------------------------------------------
-// Status display
-// ---------------------------------------------------------------------------
-
 function buildStatusText(): string {
   if (!goal) return "";
 
@@ -278,10 +254,6 @@ function buildStatusText(): string {
 
   return `${statusLabel} · ${truncated} · ${budget}`;
 }
-
-// ---------------------------------------------------------------------------
-// Goal objective injection — appends goal to system prompt
-// ---------------------------------------------------------------------------
 
 function injectGoalContext(): string | null {
   if (!goal) return null;
@@ -336,25 +308,17 @@ function injectGoalContext(): string | null {
   ].join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Extension entry point
-// ---------------------------------------------------------------------------
-
 export default function (pi: ExtensionAPI) {
-  // Guard to prevent overlapping auto-continuations
   let autoContinueTimer: ReturnType<typeof setTimeout> | null = null;
 
   function scheduleAutoContinue() {
     if (!goal || goal.status !== "active") return;
 
-    // Cancel any pending continuation
     if (autoContinueTimer) {
       clearTimeout(autoContinueTimer);
       autoContinueTimer = null;
     }
 
-    // Use setTimeout to break the synchronous agent_end → new-cycle chain.
-    // This ensures each turn fully completes before the next continuation fires.
     autoContinueTimer = setTimeout(() => {
       autoContinueTimer = null;
       if (!goal || goal.status !== "active") return;
@@ -369,10 +333,8 @@ export default function (pi: ExtensionAPI) {
     }, 200);
   }
 
-  // ---- Session lifecycle: reconstruct state on load ----
   pi.on("session_start", async (_event, ctx) => {
     reconstructState(ctx);
-    // Update status display
     if (ctx.hasUI) {
       const text = buildStatusText();
       if (text) {
@@ -389,7 +351,6 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ---- Goal objective injection: add goal to system prompt ----
   pi.on("before_agent_start", async (event, _ctx) => {
     const goalBlock = injectGoalContext();
     if (goalBlock) {
@@ -399,21 +360,17 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ---- Track tokens and auto-increment turns ----
   pi.on("turn_end", async (_event, _ctx) => {
-    // Increment turn counter
     if (goal && goal.status === "active") {
       incrementGoalTurns();
       persistGoalState(pi);
     }
-    // Update status display
     const text = buildStatusText();
     if (_ctx.hasUI) {
       _ctx.ui.setStatus("goal", text || undefined);
     }
   });
 
-  // ---- Message end: track token usage ----
   pi.on("message_end", async (event, _ctx) => {
     if (goal && goal.status === "active" && event.message.role === "assistant") {
       const usage = event.message.usage;
@@ -428,12 +385,10 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ---- Auto-continuation: after agent finishes, continue if goal is active ----
   pi.on("agent_end", async (_event, _ctx) => {
     scheduleAutoContinue();
   });
 
-  // ---- GoalTool: LLM tool for checking/updating goal ----
   pi.registerTool({
     name: "goal",
     label: "Goal",
@@ -486,7 +441,6 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      // action === "update"
       if (!params.status) {
         throw new Error(
           'The "status" field is required for update. Use "complete" or "blocked".',
@@ -526,7 +480,6 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      // status === "blocked"
       const reason = params.reason ?? "unspecified blocker";
       const result = recordBlockedAttempt(reason);
 
@@ -563,7 +516,6 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ---- /goal command ----
   pi.registerCommand("goal", {
     description:
       "Set or view a persistent goal that drives auto-continuation across turns",
@@ -584,7 +536,6 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const trimmed = args.trim();
 
-      // /goal or /goal status — show current status
       if (!trimmed || trimmed.toLowerCase() === "status") {
         if (!goal) {
           ctx.ui.notify(
@@ -619,7 +570,6 @@ export default function (pi: ExtensionAPI) {
 
       const lower = trimmed.toLowerCase();
 
-      // /goal clear
       if (lower === "clear") {
         const cleared = clearGoal();
         if (cleared) {
@@ -632,7 +582,6 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // /goal pause
       if (lower === "pause") {
         const g = pauseGoal();
         if (g) {
@@ -645,7 +594,6 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // /goal resume
       if (lower === "resume") {
         const current = getGoal();
         if (current?.status === "max_turns") {
@@ -664,7 +612,6 @@ export default function (pi: ExtensionAPI) {
         }
         ctx.ui.notify(g ? "Goal resumed." : "No paused goal to resume.", "info");
 
-        // Trigger auto-continuation if resumed
         if (g && ctx.isIdle()) {
           pi.sendUserMessage(
             `Continue working toward the goal: "${g.objective}". Use goal to check status, and mark complete or blocked as appropriate.`,
@@ -673,7 +620,6 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // /goal continue
       if (lower === "continue") {
         const g = continueFromMaxTurns();
         if (g) {
@@ -689,7 +635,6 @@ export default function (pi: ExtensionAPI) {
           "info",
         );
 
-        // Trigger auto-continuation
         if (g && ctx.isIdle()) {
           pi.sendUserMessage(
             `Continue working toward the goal: "${g.objective}". Use goal to check status, and mark complete or blocked as appropriate.`,
@@ -698,7 +643,6 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // /goal complete
       if (lower === "complete") {
         const g = completeGoal();
         if (g) {
@@ -714,7 +658,6 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // /goal <objective> — set a new goal
       if (trimmed.length > MAX_OBJECTIVE_CHARS) {
         ctx.ui.notify(
           `Goal objective is too long (${trimmed.length} chars; limit ${MAX_OBJECTIVE_CHARS}). Save the detailed instructions to a file and reference it from a shorter objective.`,
@@ -728,7 +671,6 @@ export default function (pi: ExtensionAPI) {
         existing !== null && existing.status !== "complete";
 
       if (needsConfirmation && ctx.mode === "tui") {
-        // Show replace confirmation dialog
         const tokensDisplay =
           existing!.tokenBudget !== null
             ? `${formatTokens(existing!.tokensUsed)} / ${formatTokens(existing!.tokenBudget)}`
@@ -765,7 +707,6 @@ export default function (pi: ExtensionAPI) {
 
       ctx.ui.notify("Goal set.", "info");
 
-      // Trigger auto-continuation
       if (ctx.isIdle()) {
         pi.sendUserMessage(
           `Work toward this goal: ${trimmed}. Use goal to check status periodically, and mark complete or blocked as appropriate.`,
